@@ -98,8 +98,11 @@
   <!-- p5 core -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.js"></script>
   
-  <!-- AWS IoT SDK -->
-  <script src="https://cdn.jsdelivr.net/npm/aws-iot-device-sdk@2.2.12/browser/aws-iot-sdk-browser-bundle.js"></script>
+  <!-- AWS IoT SDK - first load the AWS SDK -->
+  <script src="https://sdk.amazonaws.com/js/aws-sdk-2.852.0.min.js"></script>
+  
+  <!-- Then load the AWS IoT SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/aws-iot-device-sdk@2.2.12/browser/aws-iot-sdk-browser-bundle.min.js"></script>
 </head>
 <body>
   <div id="canvas-container"></div>
@@ -140,81 +143,95 @@
     <button onclick="toggleInstructions()" style="margin-top:10px">Close</button>
   </div>
   
-  <!-- AWS IoT MQTT script -->
+  <!-- AWS IoT MQTT wrapper script -->
   <script>
-    // Create global AWS IoT device SDK namespace
-    window.AWSIoTMQTT = {
-      connect: function(options) {
-        // Create AWS IoT device
-        try {
-          const device = AWS.IoT.DeviceClient.fromConfig(options);
-          
-          // Set up common event listeners
-          const eventEmitter = {
-            handlers: {},
-            on: function(event, handler) {
-              if (!this.handlers[event]) {
-                this.handlers[event] = [];
-              }
-              this.handlers[event].push(handler);
-              return this;
-            },
-            emit: function(event, ...args) {
-              if (this.handlers[event]) {
-                this.handlers[event].forEach(handler => handler(...args));
-              }
-            }
-          };
-          
-          // Connect to AWS IoT
-          device.connect(() => {
-            console.log("Connected to AWS IoT");
-            eventEmitter.emit('connect');
+    // Wait for AWS SDK to be fully loaded
+    document.addEventListener('DOMContentLoaded', function() {
+      // Create global AWS IoT device SDK namespace
+      window.AWSIoTMQTT = {
+        connect: function(options) {
+          try {
+            console.log("Connecting to AWS IoT with options:", options);
             
-            // Set up message handler
-            device.on('message', (topic, payload) => {
+            // Ensure AWS is defined
+            if (typeof AWS === 'undefined') {
+              console.error("AWS SDK not loaded");
+              throw new Error("AWS SDK not loaded. Please check your internet connection and refresh the page.");
+            }
+            
+            // Create a device using AWS IoT Device SDK
+            const device = new window.awsIot.device(options);
+            
+            // Set up common event listeners
+            const eventEmitter = {
+              handlers: {},
+              on: function(event, handler) {
+                if (!this.handlers[event]) {
+                  this.handlers[event] = [];
+                }
+                this.handlers[event].push(handler);
+                return this;
+              },
+              emit: function(event, ...args) {
+                if (this.handlers[event]) {
+                  this.handlers[event].forEach(handler => handler(...args));
+                }
+              }
+            };
+            
+            // Handle connection
+            device.on('connect', function() {
+              console.log("AWS IoT device connected");
+              eventEmitter.emit('connect');
+            });
+            
+            // Handle messages
+            device.on('message', function(topic, payload) {
+              console.log("Message received on topic:", topic);
               eventEmitter.emit('message', topic, payload);
             });
-          });
-          
-          // Handle errors
-          device.on('error', (error) => {
-            console.error("AWS IoT error:", error);
-            eventEmitter.emit('error', error);
-          });
-          
-          device.on('close', () => {
-            console.log("AWS IoT connection closed");
-            eventEmitter.emit('close');
-          });
-          
-          // Add methods to our hybrid device
-          const hybridDevice = {
-            isConnected: function() {
-              return device.connected;
-            },
-            subscribe: function(topic) {
-              device.subscribe(topic);
-            },
-            unsubscribe: function(topic) {
-              device.unsubscribe(topic);
-            },
-            publish: function(topic, message) {
-              device.publish(topic, message);
-            },
-            disconnect: function() {
-              device.disconnect();
-            },
-            on: eventEmitter.on.bind(eventEmitter)
-          };
-          
-          return hybridDevice;
-        } catch (error) {
-          console.error("Error creating AWS IoT device:", error);
-          throw error;
+            
+            // Handle errors
+            device.on('error', function(error) {
+              console.error("AWS IoT error:", error);
+              eventEmitter.emit('error', error);
+            });
+            
+            // Handle close
+            device.on('close', function() {
+              console.log("AWS IoT connection closed");
+              eventEmitter.emit('close');
+            });
+            
+            // Add methods to our hybrid device
+            const hybridDevice = {
+              isConnected: function() {
+                return device.connected;
+              },
+              subscribe: function(topic) {
+                console.log("Subscribing to topic:", topic);
+                device.subscribe(topic);
+              },
+              unsubscribe: function(topic) {
+                device.unsubscribe(topic);
+              },
+              publish: function(topic, message) {
+                device.publish(topic, message);
+              },
+              disconnect: function() {
+                device.end();
+              },
+              on: eventEmitter.on.bind(eventEmitter)
+            };
+            
+            return hybridDevice;
+          } catch (error) {
+            console.error("Error creating AWS IoT device:", error);
+            throw error;
+          }
         }
-      }
-    };
+      };
+    });
     
     // Instructions panel toggle
     function toggleInstructions() {
@@ -228,6 +245,11 @@
     
     // Show instructions on first load
     window.onload = function() {
+      // Check if AWS SDK is loaded
+      if (typeof AWS === 'undefined') {
+        alert("Warning: AWS SDK failed to load. This application may not work properly. Please check your internet connection and refresh the page.");
+      }
+      
       // Show the instructions panel after a short delay
       setTimeout(function() {
         document.getElementById('instructions').style.display = 'block';

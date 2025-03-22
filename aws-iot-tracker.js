@@ -1,4 +1,4 @@
-// AFL Ball Tracker - Fixed version
+// AFL Ball Tracker - Final version
 // Global Variables
 let appWidth = 1200;
 let appHeight = 800;
@@ -20,10 +20,10 @@ let connectButton;
 let topicInput;
 let statusDiv;
 
-// Certificate files
-let certFile = null;
-let privateKeyFile = null;
-let rootCAFile = null;
+// Certificate content variables
+let certContent = null;
+let privateKeyContent = null;
+let rootCAContent = null;
 let certFileLoaded = false;
 let privateKeyLoaded = false;
 let rootCALoaded = false;
@@ -46,6 +46,12 @@ function setup() {
   setupUI();
   
   frameRate(60);
+  
+  // Check if AWS SDK is available
+  if (typeof AWS === 'undefined' || typeof window.awsIot === 'undefined') {
+    statusMessage = "Warning: AWS IoT SDK not loaded. Please check your connection.";
+    console.error("AWS SDK or AWS IoT SDK not loaded");
+  }
 }
 
 function setupUI() {
@@ -147,10 +153,19 @@ function updateFileStatus() {
 
 function handleCertFile(file) {
   if (file.name.endsWith('.crt') || file.name.endsWith('.pem')) {
-    certFile = file;
-    certFileLoaded = true;
-    statusMessage = "Certificate loaded: " + file.name;
-    updateFileStatus();
+    // Read the file content immediately
+    let reader = new FileReader();
+    reader.onload = function(e) {
+      certContent = e.target.result;
+      certFileLoaded = true;
+      statusMessage = "Certificate loaded: " + file.name;
+      updateFileStatus();
+    };
+    reader.onerror = function(e) {
+      console.error("Error reading certificate file:", e);
+      statusMessage = "Error reading certificate file";
+    };
+    reader.readAsText(file.file);
   } else {
     statusMessage = "Invalid certificate file. Please use a .crt or .pem file.";
   }
@@ -158,10 +173,19 @@ function handleCertFile(file) {
 
 function handlePrivateKeyFile(file) {
   if (file.name.endsWith('.key') || file.name.endsWith('.private.key')) {
-    privateKeyFile = file;
-    privateKeyLoaded = true;
-    statusMessage = "Private key loaded: " + file.name;
-    updateFileStatus();
+    // Read the file content immediately
+    let reader = new FileReader();
+    reader.onload = function(e) {
+      privateKeyContent = e.target.result;
+      privateKeyLoaded = true;
+      statusMessage = "Private key loaded: " + file.name;
+      updateFileStatus();
+    };
+    reader.onerror = function(e) {
+      console.error("Error reading private key file:", e);
+      statusMessage = "Error reading private key file";
+    };
+    reader.readAsText(file.file);
   } else {
     statusMessage = "Invalid private key file. Please use a .key file.";
   }
@@ -169,16 +193,25 @@ function handlePrivateKeyFile(file) {
 
 function handleRootCAFile(file) {
   if (file.name.endsWith('.pem')) {
-    rootCAFile = file;
-    rootCALoaded = true;
-    statusMessage = "Root CA loaded: " + file.name;
-    updateFileStatus();
+    // Read the file content immediately
+    let reader = new FileReader();
+    reader.onload = function(e) {
+      rootCAContent = e.target.result;
+      rootCALoaded = true;
+      statusMessage = "Root CA loaded: " + file.name;
+      updateFileStatus();
+    };
+    reader.onerror = function(e) {
+      console.error("Error reading Root CA file:", e);
+      statusMessage = "Error reading Root CA file";
+    };
+    reader.readAsText(file.file);
   } else {
     statusMessage = "Invalid Root CA file. Please use a .pem file.";
   }
 }
 
-async function connectToAWSIoT() {
+function connectToAWSIoT() {
   if (!connectButton) return; // Safety check
   
   // If already connected, disconnect first
@@ -194,19 +227,24 @@ async function connectToAWSIoT() {
     return;
   }
   
+  // Check if all certificates are loaded
+  if (!certFileLoaded || !privateKeyLoaded || !rootCALoaded) {
+    statusMessage = "Please load all certificate files first";
+    return;
+  }
+  
+  // Check if AWS IoT SDK is loaded
+  if (typeof AWS === 'undefined' || typeof window.awsIot === 'undefined') {
+    statusMessage = "AWS IoT SDK not loaded. Please check your connection and refresh.";
+    return;
+  }
+  
   // Get topic from input
   mqttTopic = topicInput.value();
   
-  statusMessage = "Reading certificates...";
+  statusMessage = "Connecting to AWS IoT...";
   
   try {
-    // Read certificate files
-    const certificate = await readFileAsync(certFile);
-    const privateKey = await readFileAsync(privateKeyFile);
-    const rootCA = await readFileAsync(rootCAFile);
-    
-    statusMessage = "Connecting to AWS IoT...";
-    
     // Create AWS IoT device
     const clientId = "ball-tracker-" + Math.random().toString(16).substr(2, 8);
     
@@ -215,9 +253,9 @@ async function connectToAWSIoT() {
       protocol: 'wss',
       host: awsIotEndpoint,
       clientId: clientId,
-      cert: certificate,
-      key: privateKey,
-      ca: rootCA,
+      cert: certContent,
+      key: privateKeyContent,
+      ca: rootCAContent,
       reconnectPeriod: 2000,
       keepalive: 10
     };
@@ -227,6 +265,13 @@ async function connectToAWSIoT() {
     connectButton.attribute('disabled', '');
     connectButton.style('background-color', '#cccccc');
     connectButton.style('cursor', 'not-allowed');
+    
+    console.log("Attempting to connect to AWS IoT with config:", {
+      host: awsIotConfig.host,
+      clientId: awsIotConfig.clientId,
+      protocol: awsIotConfig.protocol,
+      // Don't log sensitive certificate data
+    });
     
     // Create MQTT client using the AWS IoT MQTT Client library
     if (window.AWSIoTMQTT) {
@@ -279,7 +324,7 @@ async function connectToAWSIoT() {
         }
       });
     } else {
-      throw new Error("AWS IoT MQTT client library not loaded");
+      throw new Error("AWS IoT MQTT client library not loaded. Please refresh the page.");
     }
     
   } catch (error) {
@@ -293,16 +338,6 @@ async function connectToAWSIoT() {
       connectButton.style('cursor', 'pointer');
     }
   }
-}
-
-// Helper function to read file contents
-function readFileAsync(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsText(file);
-  });
 }
 
 // Called when a message arrives
