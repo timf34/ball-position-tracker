@@ -26,6 +26,31 @@
       max-width: 320px;
       overflow-y: auto;
       max-height: 80vh;
+      transition: all 0.3s ease;
+    }
+    
+    #settings-container.minimized {
+      max-width: 40px;
+      max-height: 40px;
+      overflow: hidden;
+      padding: 8px;
+    }
+    
+    #minimize-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 24px;
+      height: 24px;
+      background-color: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      z-index: 10;
     }
     input {
       width: 100%;
@@ -135,14 +160,7 @@
       <li>Enter the MQTT topic that publishes ball position data</li>
       <li>Click "Connect to AWS IoT" to start receiving position data</li>
     </ol>
-    
-    <p>Expected message format:</p>
-    <pre style="background:#f1f1f1;padding:10px;border-radius:5px;font-size:12px;overflow:auto;">
-{
-  "X": 51,  // 0-102 range
-  "Y": 32,  // 0-64 range
-}
-</pre>
+  
     
     <button onclick="toggleInstructions()" style="margin-top:10px">Close</button>
   </div>
@@ -249,6 +267,12 @@
       settingsContainer.style('border-radius', '8px');
       settingsContainer.style('z-index', '10');
       settingsContainer.style('min-width', '300px');
+      
+      // Add minimize button
+      const minimizeButton = createButton('−');
+      minimizeButton.id('minimize-button');
+      minimizeButton.parent(settingsContainer);
+      minimizeButton.mousePressed(toggleSettingsPanel);
       
       // AWS Region
       createP('AWS Region:').parent(settingsContainer);
@@ -603,6 +627,22 @@
         instructions.style.display = 'block';
       } else {
         instructions.style.display = 'none';
+      }
+    }
+    
+    // Toggle settings panel between minimized and expanded states
+    function toggleSettingsPanel() {
+      const settingsContainer = document.getElementById('settings-container');
+      const minimizeButton = document.getElementById('minimize-button');
+      
+      if (settingsContainer.classList.contains('minimized')) {
+        // Expand panel
+        settingsContainer.classList.remove('minimized');
+        minimizeButton.innerHTML = '−'; // Minus symbol
+      } else {
+        // Minimize panel
+        settingsContainer.classList.add('minimized');
+        minimizeButton.innerHTML = '+'; // Plus symbol
       }
     }
   </script>
