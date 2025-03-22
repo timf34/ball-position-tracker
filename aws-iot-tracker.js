@@ -1,17 +1,16 @@
-// AWS IoT MQTT Ball Tracker - Visualizes ball position from AWS IoT MQTT messages
+// AFL Ball Tracker - Fixed version
 // Global Variables
 let appWidth = 1200;
 let appHeight = 800;
 let ballX = appWidth / 2;
 let ballY = appHeight / 2;
-let possession = 1; // Default to home team possession
 let lastMessageTime = 0;
 let ballSize = 65; // Size of the ball image
 
 // AWS IoT and MQTT settings
 let client = null;
 let connectionStatus = false;
-let mqttTopic = "marvel_AUS/ai_pub"; // Default topic, you'll change this
+let mqttTopic = "marvel_AUS/ai_pub"; // Default topic
 let awsIotEndpoint = "a3lkzcadhi1yzr-ats.iot.ap-southeast-2.amazonaws.com";
 let statusMessage = "";
 let lastReceivedMessage = "";
@@ -19,8 +18,7 @@ let lastReceivedMessage = "";
 // UI elements
 let connectButton;
 let topicInput;
-let fieldSelect;
-let loadCertsButton;
+let statusDiv;
 
 // Certificate files
 let certFile = null;
@@ -30,20 +28,14 @@ let certFileLoaded = false;
 let privateKeyLoaded = false;
 let rootCALoaded = false;
 
-// Ball images for different sports
-let ballFootballHome, ballFootballAway;
-let ballAFLHome, ballAFLAway;
-let ballRugbyHome, ballRugbyAway;
+// Images
 let fieldImage;
-let selectedSport = "rugby"; // Default sport
-
-// Field background images
-let images = [];
+let ballImage;
 
 function preload() {
-  // Load field images
-  images[0] = loadImage('images/PitchCorrect.png');
-  ballAFL = loadImage('images/AFLBall.png');
+  // Load images
+  fieldImage = loadImage('images/PitchCorrect.png');
+  ballImage = loadImage('images/AFLBall.png');
 }
 
 function setup() {
@@ -52,9 +44,6 @@ function setup() {
   
   // Setup UI elements
   setupUI();
-  
-  // Default field image
-  fieldImage = images[0]; // Rugby pitch
   
   frameRate(60);
 }
@@ -84,17 +73,6 @@ function setupUI() {
   topicInput.parent(settingsContainer);
   topicInput.style('width', '280px');
   
-  // Field select dropdown
-  createP('Field Type:').parent(settingsContainer);
-  fieldSelect = createSelect();
-  fieldSelect.parent(settingsContainer);
-  fieldSelect.style('width', '280px');
-  fieldSelect.option('Football', 'football');
-  fieldSelect.option('AFL', 'afl');
-  fieldSelect.option('Rugby', 'rugby');
-  fieldSelect.selected('rugby');
-  fieldSelect.changed(onFieldChange);
-  
   // Certificate file uploads
   createDiv('<hr>').parent(settingsContainer);
   createP('<b>AWS IoT Certificates</b>').parent(settingsContainer).style('margin-bottom', '5px');
@@ -118,32 +96,35 @@ function setupUI() {
   rootCAInput.style('margin-bottom', '10px');
   
   // Status indicators for file uploads
-  const statusDiv = createDiv();
+  statusDiv = createDiv();
   statusDiv.parent(settingsContainer);
   statusDiv.id('file-status');
   statusDiv.style('margin-top', '10px');
   statusDiv.style('margin-bottom', '10px');
   statusDiv.style('font-size', '14px');
-  updateFileStatus();
   
   // Connect button
   connectButton = createButton('Connect to AWS IoT');
   connectButton.parent(settingsContainer);
   connectButton.style('margin-top', '10px');
   connectButton.style('padding', '8px 16px');
-  connectButton.style('background-color', '#008037');
+  connectButton.style('background-color', '#cccccc'); // Start with disabled color
   connectButton.style('color', 'white');
   connectButton.style('border', 'none');
   connectButton.style('border-radius', '4px');
-  connectButton.style('cursor', 'pointer');
+  connectButton.style('cursor', 'not-allowed'); // Start with disabled cursor
   connectButton.style('width', '280px');
-  connectButton.attribute('disabled', true); // Start disabled until all certs loaded
+  connectButton.attribute('disabled', ''); // Disable initially
   connectButton.mousePressed(connectToAWSIoT);
+  
+  // Update the file status display initially
+  updateFileStatus();
 }
 
 // Update file status indicators
 function updateFileStatus() {
-  const statusDiv = select('#file-status');
+  if (!statusDiv) return; // Safety check
+  
   statusDiv.html(`
     <div>Certificate: ${certFileLoaded ? '✅ Loaded' : '❌ Missing'}</div>
     <div>Private Key: ${privateKeyLoaded ? '✅ Loaded' : '❌ Missing'}</div>
@@ -151,12 +132,16 @@ function updateFileStatus() {
   `);
   
   // Enable connection button only when all files are loaded
-  if (certFileLoaded && privateKeyLoaded && rootCALoaded) {
-    connectButton.removeAttribute('disabled');
-    connectButton.style('background-color', '#008037');
-  } else {
-    connectButton.attribute('disabled', true);
-    connectButton.style('background-color', '#cccccc');
+  if (connectButton) {
+    if (certFileLoaded && privateKeyLoaded && rootCALoaded) {
+      connectButton.removeAttribute('disabled');
+      connectButton.style('background-color', '#008037');
+      connectButton.style('cursor', 'pointer');
+    } else {
+      connectButton.attribute('disabled', '');
+      connectButton.style('background-color', '#cccccc');
+      connectButton.style('cursor', 'not-allowed');
+    }
   }
 }
 
@@ -193,26 +178,9 @@ function handleRootCAFile(file) {
   }
 }
 
-function onFieldChange() {
-  const sportValue = fieldSelect.value();
-  
-  switch(sportValue) {
-    case 'football':
-      fieldImage = images[0];
-      selectedSport = 'football';
-      break;
-    case 'afl':
-      fieldImage = images[1];
-      selectedSport = 'afl';
-      break;
-    case 'rugby':
-      fieldImage = images[3];
-      selectedSport = 'rugby';
-      break;
-  }
-}
-
 async function connectToAWSIoT() {
+  if (!connectButton) return; // Safety check
+  
   // If already connected, disconnect first
   if (client && client.isConnected()) {
     try {
@@ -256,49 +224,74 @@ async function connectToAWSIoT() {
     
     // Initialize AWS IoT MQTT Client
     connectButton.html('Connecting...');
-    connectButton.attribute('disabled', true);
+    connectButton.attribute('disabled', '');
+    connectButton.style('background-color', '#cccccc');
+    connectButton.style('cursor', 'not-allowed');
     
     // Create MQTT client using the AWS IoT MQTT Client library
-    client = AWSIoTMQTT.connect(awsIotConfig);
-    
-    // Set up event handlers
-    client.on('connect', function() {
-      console.log('Connected to AWS IoT');
-      connectionStatus = true;
-      statusMessage = "Connected to AWS IoT";
+    if (window.AWSIoTMQTT) {
+      client = window.AWSIoTMQTT.connect(awsIotConfig);
       
-      // Subscribe to the MQTT topic
-      client.subscribe(mqttTopic);
+      // Set up event handlers
+      client.on('connect', function() {
+        console.log('Connected to AWS IoT');
+        connectionStatus = true;
+        statusMessage = "Connected to AWS IoT";
+        
+        // Subscribe to the MQTT topic
+        client.subscribe(mqttTopic);
+        
+        if (connectButton) {
+          connectButton.html('Disconnect');
+          connectButton.removeAttribute('disabled');
+          connectButton.style('background-color', '#008037');
+          connectButton.style('cursor', 'pointer');
+        }
+      });
       
-      connectButton.html('Disconnect');
-      connectButton.removeAttribute('disabled');
-    });
-    
-    client.on('message', function(topic, payload) {
-      onMessageArrived(topic, payload);
-    });
-    
-    client.on('error', function(err) {
-      console.error('Connection error:', err);
-      statusMessage = "Connection error: " + err.message;
-      connectionStatus = false;
-      connectButton.html('Connect to AWS IoT');
-      connectButton.removeAttribute('disabled');
-    });
-    
-    client.on('close', function() {
-      console.log('Connection closed');
-      statusMessage = "Connection closed";
-      connectionStatus = false;
-      connectButton.html('Connect to AWS IoT');
-      connectButton.removeAttribute('disabled');
-    });
+      client.on('message', function(topic, payload) {
+        onMessageArrived(topic, payload);
+      });
+      
+      client.on('error', function(err) {
+        console.error('Connection error:', err);
+        statusMessage = "Connection error: " + err.message;
+        connectionStatus = false;
+        
+        if (connectButton) {
+          connectButton.html('Connect to AWS IoT');
+          connectButton.removeAttribute('disabled');
+          connectButton.style('background-color', '#008037');
+          connectButton.style('cursor', 'pointer');
+        }
+      });
+      
+      client.on('close', function() {
+        console.log('Connection closed');
+        statusMessage = "Connection closed";
+        connectionStatus = false;
+        
+        if (connectButton) {
+          connectButton.html('Connect to AWS IoT');
+          connectButton.removeAttribute('disabled');
+          connectButton.style('background-color', '#008037');
+          connectButton.style('cursor', 'pointer');
+        }
+      });
+    } else {
+      throw new Error("AWS IoT MQTT client library not loaded");
+    }
     
   } catch (error) {
     console.error('Failed to connect:', error);
     statusMessage = "Failed to connect: " + error.message;
-    connectButton.html('Connect to AWS IoT');
-    connectButton.removeAttribute('disabled');
+    
+    if (connectButton) {
+      connectButton.html('Connect to AWS IoT');
+      connectButton.removeAttribute('disabled');
+      connectButton.style('background-color', '#008037');
+      connectButton.style('cursor', 'pointer');
+    }
   }
 }
 
@@ -343,11 +336,6 @@ function updateBallPosition(data) {
     ballX = data.X * scaleX;
     ballY = data.Y * scaleY;
     
-    // Update possession if provided
-    if (data.P !== undefined) {
-      possession = data.P;
-    }
-    
     // Log received coordinates
     console.log(`Received ball position: (${data.X}, ${data.Y}), Scaled: (${ballX}, ${ballY})`);
   }
@@ -357,24 +345,8 @@ function draw() {
   // Draw field image
   image(fieldImage, 0, 0, appWidth, appHeight);
   
-  // Draw the ball based on possession
-  if (possession === 1) {
-    if (selectedSport === "football") {
-      image(ballFootballHome, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
-    } else if (selectedSport === "afl") {
-      image(ballAFLHome, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
-    } else if (selectedSport === "rugby") {
-      image(ballRugbyHome, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
-    }
-  } else {
-    if (selectedSport === "football") {
-      image(ballFootballAway, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
-    } else if (selectedSport === "afl") {
-      image(ballAFLAway, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
-    } else if (selectedSport === "rugby") {
-      image(ballRugbyAway, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
-    }
-  }
+  // Draw the ball
+  image(ballImage, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
   
   // Display connection status
   displayStatus();
