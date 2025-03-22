@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AWS IoT Ball Position Tracker</title>
+  <style>
+    #canvas-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      position: relative;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    #settings-container {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 100;
+      background-color: rgba(255, 255, 255, 0.9);
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      max-width: 320px;
+      overflow-y: auto;
+      max-height: 80vh;
+    }
+    input, select {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    button {
+      background-color: #008037;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background-color 0.3s;
+      width: 100%;
+    }
+    button:hover {
+      background-color: #006028;
+    }
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    .status-box {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background-color: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+    html, body { 
+      margin: 0; 
+      padding: 0; 
+      height: 100%; 
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+    }
+    canvas { display: block; }
+    
+    /* File status styling */
+    #file-status {
+      background-color: #f8f8f8;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+    }
+    
+    /* Help panel styling */
+    #help-panel {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background-color: rgba(255, 255, 255, 0.9);
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      max-width: 300px;
+      font-size: 14px;
+      display: none;
+      z-index: 100;
+    }
+    
+    #help-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 50;
+      width: auto;
+      padding: 8px 16px;
+      background-color: #333;
+    }
+    
+    code {
+      background-color: #f1f1f1;
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+    
+    hr {
+      border: 0;
+      height: 1px;
+      background-color: #ddd;
+      margin: 15px 0;
+    }
+  </style>
+  <!-- p5 core -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.js"></script>
+  
+  <!-- AWS IoT SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/aws-iot-device-sdk@2.2.12/browser/aws-iot-sdk-browser-bundle.js"></script>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  
+  <!-- Help button -->
+  <button id="help-button" onclick="toggleHelp()">Help</button>
+  
+  <!-- Help panel -->
+  <div id="help-panel">
+    <h3>AWS IoT MQTT Ball Tracker</h3>
+    <p>This application visualizes ball position data from an AWS IoT MQTT topic.</p>
+    
+    <h4>Setup Instructions:</h4>
+    <ol>
+      <li>Upload all 3 required certificate files:
+        <ul>
+          <li>Device certificate (.pem.crt)</li>
+          <li>Private key (.private.key)</li>
+          <li>Root CA certificate (AmazonRootCA1.pem)</li>
+        </ul>
+      </li>
+      <li>Enter the MQTT topic that publishes ball position data</li>
+      <li>Select the field type that matches your sport</li>
+      <li>Click "Connect to AWS IoT" to start receiving position data</li>
+    </ol>
+    
+    <p>Expected message format:</p>
+    <pre style="background:#f1f1f1;padding:10px;border-radius:5px;font-size:12px;overflow:auto;">
+{
+  "T": 0,
+  "X": 51,  // 0-102 range
+  "Y": 32,  // 0-64 range
+  "P": 1,   // 1=home, 0=away
+  "Pa": 0,  // Pass indicator
+  "G": 0,   // Goal/Try indicator
+  "C": 0    // Conversion
+}
+</pre>
+    
+    <button onclick="toggleHelp()" style="margin-top:10px">Close</button>
+  </div>
+  
+  <!-- AWS IoT MQTT script -->
+  <script>
+    // Create global AWS IoT device SDK namespace
+    window.AWSIoTMQTT = {
+      connect: function(options) {
+        // Create AWS IoT device
+        try {
+          const device = AWS.IoT.DeviceClient.fromConfig(options);
+          
+          // Set up common event listeners
+          const eventEmitter = {
+            handlers: {},
+            on: function(event, handler) {
+              if (!this.handlers[event]) {
+                this.handlers[event] = [];
+              }
+              this.handlers[event].push(handler);
+              return this;
+            },
+            emit: function(event, ...args) {
+              if (this.handlers[event]) {
+                this.handlers[event].forEach(handler => handler(...args));
+              }
+            }
+          };
+          
+          // Connect to AWS IoT
+          device.connect(() => {
+            console.log("Connected to AWS IoT");
+            eventEmitter.emit('connect');
+            
+            // Set up message handler
+            device.on('message', (topic, payload) => {
+              eventEmitter.emit('message', topic, payload);
+            });
+          });
+          
+          // Handle errors
+          device.on('error', (error) => {
+            console.error("AWS IoT error:", error);
+            eventEmitter.emit('error', error);
+          });
+          
+          device.on('close', () => {
+            console.log("AWS IoT connection closed");
+            eventEmitter.emit('close');
+          });
+          
+          // Add methods to our hybrid device
+          const hybridDevice = {
+            isConnected: function() {
+              return device.connected;
+            },
+            subscribe: function(topic) {
+              device.subscribe(topic);
+            },
+            unsubscribe: function(topic) {
+              device.unsubscribe(topic);
+            },
+            publish: function(topic, message) {
+              device.publish(topic, message);
+            },
+            disconnect: function() {
+              device.disconnect();
+            },
+            on: eventEmitter.on.bind(eventEmitter)
+          };
+          
+          return hybridDevice;
+        } catch (error) {
+          console.error("Error creating AWS IoT device:", error);
+          throw error;
+        }
+      }
+    };
+    
+    // Help panel toggle
+    function toggleHelp() {
+      const helpPanel = document.getElementById('help-panel');
+      if (helpPanel.style.display === 'block') {
+        helpPanel.style.display = 'none';
+      } else {
+        helpPanel.style.display = 'block';
+      }
+    }
+    
+    // Show help on first load
+    window.onload = function() {
+      // Show the help panel after a short delay
+      setTimeout(function() {
+        document.getElementById('help-panel').style.display = 'block';
+      }, 1000);
+    };
+  </script>
+  
+  <!-- Main application code -->
+  <script src="aws-iot-tracker.js"></script>
+</body>
+</html>
