@@ -62,15 +62,26 @@
     }
     canvas { display: block; }
     
-    /* File status styling */
-    #file-status {
-      background-color: #f8f8f8;
+    /* Status display */
+    #connection-status {
       padding: 8px;
       border-radius: 4px;
+      margin: 10px 0;
+      background-color: #f8f8f8;
       border: 1px solid #ddd;
     }
     
-    /* Instructions panel styling */
+    #debug-log {
+      margin-top: 15px;
+      max-height: 100px;
+      overflow-y: auto;
+      font-size: 12px;
+      background-color: #f0f0f0;
+      padding: 5px;
+      border-radius: 4px;
+    }
+    
+    /* Instructions panel */
     #instructions {
       position: fixed;
       top: 10px;
@@ -81,7 +92,6 @@
       box-shadow: 0 2px 10px rgba(0,0,0,0.2);
       max-width: 300px;
       font-size: 14px;
-      display: none;
       z-index: 100;
     }
     
@@ -95,14 +105,11 @@
       background-color: #333;
     }
   </style>
-  <!-- p5 core -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.js"></script>
-  
-  <!-- AWS IoT SDK - first load the AWS SDK -->
-  <script src="https://sdk.amazonaws.com/js/aws-sdk-2.852.0.min.js"></script>
-  
-  <!-- Then load the AWS IoT SDK -->
-  <script src="https://cdn.jsdelivr.net/npm/aws-iot-device-sdk@2.2.12/browser/aws-iot-sdk-browser-bundle.min.js"></script>
+  <!-- Library dependencies -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1036.0.min.js"></script>
 </head>
 <body>
   <div id="canvas-container"></div>
@@ -117,11 +124,12 @@
     
     <h4>Setup Instructions:</h4>
     <ol>
-      <li>Upload all 3 required certificate files:
+      <li>Enter your AWS credentials to connect to AWS IoT:
         <ul>
-          <li>Device certificate (.pem.crt)</li>
-          <li>Private key (.private.key)</li>
-          <li>Root CA certificate (AmazonRootCA1.pem)</li>
+          <li>AWS Region (e.g., ap-southeast-2)</li>
+          <li>AWS Access Key ID</li>
+          <li>AWS Secret Access Key</li>
+          <li>AWS IoT Endpoint (from your AWS IoT Core settings)</li>
         </ul>
       </li>
       <li>Enter the MQTT topic that publishes ball position data</li>
@@ -131,133 +139,472 @@
     <p>Expected message format:</p>
     <pre style="background:#f1f1f1;padding:10px;border-radius:5px;font-size:12px;overflow:auto;">
 {
-  "T": 0,
   "X": 51,  // 0-102 range
   "Y": 32,  // 0-64 range
-  "P": 1,   // Possession (optional)
-  "Pa": 0,  // Pass indicator (optional)
-  "G": 0    // Goal indicator (optional)
 }
 </pre>
     
     <button onclick="toggleInstructions()" style="margin-top:10px">Close</button>
   </div>
-  
-  <!-- AWS IoT MQTT wrapper script -->
+
   <script>
-    // Wait for AWS SDK to be fully loaded
-    document.addEventListener('DOMContentLoaded', function() {
-      // Create global AWS IoT device SDK namespace
-      window.AWSIoTMQTT = {
-        connect: function(options) {
-          try {
-            console.log("Connecting to AWS IoT with options:", options);
-            
-            // Ensure AWS is defined
-            if (typeof AWS === 'undefined') {
-              console.error("AWS SDK not loaded");
-              throw new Error("AWS SDK not loaded. Please check your internet connection and refresh the page.");
-            }
-            
-            // Create a device using AWS IoT Device SDK
-            const device = new window.awsIot.device(options);
-            
-            // Set up common event listeners
-            const eventEmitter = {
-              handlers: {},
-              on: function(event, handler) {
-                if (!this.handlers[event]) {
-                  this.handlers[event] = [];
-                }
-                this.handlers[event].push(handler);
-                return this;
-              },
-              emit: function(event, ...args) {
-                if (this.handlers[event]) {
-                  this.handlers[event].forEach(handler => handler(...args));
-                }
-              }
-            };
-            
-            // Handle connection
-            device.on('connect', function() {
-              console.log("AWS IoT device connected");
-              eventEmitter.emit('connect');
-            });
-            
-            // Handle messages
-            device.on('message', function(topic, payload) {
-              console.log("Message received on topic:", topic);
-              eventEmitter.emit('message', topic, payload);
-            });
-            
-            // Handle errors
-            device.on('error', function(error) {
-              console.error("AWS IoT error:", error);
-              eventEmitter.emit('error', error);
-            });
-            
-            // Handle close
-            device.on('close', function() {
-              console.log("AWS IoT connection closed");
-              eventEmitter.emit('close');
-            });
-            
-            // Add methods to our hybrid device
-            const hybridDevice = {
-              isConnected: function() {
-                return device.connected;
-              },
-              subscribe: function(topic) {
-                console.log("Subscribing to topic:", topic);
-                device.subscribe(topic);
-              },
-              unsubscribe: function(topic) {
-                device.unsubscribe(topic);
-              },
-              publish: function(topic, message) {
-                device.publish(topic, message);
-              },
-              disconnect: function() {
-                device.end();
-              },
-              on: eventEmitter.on.bind(eventEmitter)
-            };
-            
-            return hybridDevice;
-          } catch (error) {
-            console.error("Error creating AWS IoT device:", error);
-            throw error;
+    // Global Variables
+    let appWidth = 1200;
+    let appHeight = 800;
+    let ballX = appWidth / 2;
+    let ballY = appHeight / 2;
+    let lastMessageTime = 0;
+    let ballSize = 65; // Size of the ball image
+
+    // MQTT and AWS settings
+    let client = null;
+    let connectionStatus = false;
+    let mqttTopic = "marvel_AUS/ai_pub"; // Default topic
+    let awsIotEndpoint = "a3lkzcadhi1yzr-ats.iot.ap-southeast-2.amazonaws.com";
+    let statusMessage = "Not connected";
+    let lastReceivedMessage = "";
+
+    // AWS credentials
+    let awsRegion = "ap-southeast-2"; // Default region
+    let awsAccessKey = "";
+    let awsSecretKey = "";
+
+    // UI elements
+    let connectButton;
+    let topicInput;
+    let regionInput;
+    let endpointInput;
+    let accessKeyInput;
+    let secretKeyInput;
+    let statusDiv;
+    let debugLog;
+
+    // Images
+    let fieldImage;
+    let ballImage;
+
+    // P5.js preload function
+    function preload() {
+      // Load field and ball images
+      // Use placeholders if images aren't available
+      try {
+        fieldImage = loadImage('https://raw.githubusercontent.com/djmcgill/placeholder-afl-field/main/PitchCorrect.png');
+        ballImage = loadImage('https://raw.githubusercontent.com/djmcgill/placeholder-afl-ball/main/AFLBall.png');
+      } catch (e) {
+        console.error("Error loading images:", e);
+        // Create fallback images if loading fails
+        fieldImage = createImage(appWidth, appHeight);
+        fieldImage.loadPixels();
+        for (let i = 0; i < fieldImage.width; i++) {
+          for (let j = 0; j < fieldImage.height; j++) {
+            fieldImage.set(i, j, color(34, 139, 34)); // Green field
           }
         }
-      };
-    });
-    
-    // Instructions panel toggle
-    function toggleInstructions() {
-      const instructions = document.getElementById('instructions');
-      if (instructions.style.display === 'block') {
-        instructions.style.display = 'none';
+        fieldImage.updatePixels();
+        
+        ballImage = createImage(ballSize, ballSize);
+        ballImage.loadPixels();
+        for (let i = 0; i < ballImage.width; i++) {
+          for (let j = 0; j < ballImage.height; j++) {
+            let d = dist(i, j, ballSize/2, ballSize/2);
+            if (d < ballSize/2) {
+              ballImage.set(i, j, color(165, 42, 42)); // Brown ball
+            } else {
+              ballImage.set(i, j, color(0, 0, 0, 0)); // Transparent
+            }
+          }
+        }
+        ballImage.updatePixels();
+      }
+    }
+
+    // P5.js setup function
+    function setup() {
+      const cnv = createCanvas(appWidth, appHeight);
+      cnv.parent('canvas-container');
+      
+      // Setup UI elements
+      setupUI();
+      
+      frameRate(60);
+      
+      // Check if required libraries are available
+      logDebug("MQTT.js loaded: " + (typeof mqtt !== 'undefined'));
+      logDebug("AWS SDK loaded: " + (typeof AWS !== 'undefined'));
+      logDebug("CryptoJS loaded: " + (typeof CryptoJS !== 'undefined'));
+      
+      if (typeof mqtt === 'undefined' || typeof AWS === 'undefined' || typeof CryptoJS === 'undefined') {
+        statusMessage = "Warning: Required libraries not loaded. Please check your connection.";
+      }
+    }
+
+    // Setup UI elements
+    function setupUI() {
+      // Create UI container for settings
+      const settingsContainer = createDiv();
+      settingsContainer.id('settings-container');
+      settingsContainer.position(10, 10);
+      settingsContainer.style('background-color', 'rgba(255, 255, 255, 0.8)');
+      settingsContainer.style('padding', '10px');
+      settingsContainer.style('border-radius', '8px');
+      settingsContainer.style('z-index', '10');
+      settingsContainer.style('min-width', '300px');
+      
+      // AWS Region
+      createP('AWS Region:').parent(settingsContainer);
+      regionInput = createInput(awsRegion);
+      regionInput.parent(settingsContainer);
+      regionInput.style('width', '280px');
+      
+      // AWS IoT Endpoint
+      createP('AWS IoT Endpoint:').parent(settingsContainer);
+      endpointInput = createInput(awsIotEndpoint);
+      endpointInput.parent(settingsContainer);
+      endpointInput.style('width', '280px');
+      
+      // AWS Access Key
+      createP('AWS Access Key ID:').parent(settingsContainer);
+      accessKeyInput = createInput(awsAccessKey);
+      accessKeyInput.parent(settingsContainer);
+      accessKeyInput.style('width', '280px');
+      accessKeyInput.attribute('placeholder', 'Enter your AWS Access Key ID');
+      
+      // AWS Secret Key
+      createP('AWS Secret Access Key:').parent(settingsContainer);
+      secretKeyInput = createInput(awsSecretKey);
+      secretKeyInput.parent(settingsContainer);
+      secretKeyInput.style('width', '280px');
+      secretKeyInput.attribute('placeholder', 'Enter your AWS Secret Access Key');
+      secretKeyInput.attribute('type', 'password');
+      
+      // MQTT Topic input
+      createP('MQTT Topic:').parent(settingsContainer);
+      topicInput = createInput(mqttTopic);
+      topicInput.parent(settingsContainer);
+      topicInput.style('width', '280px');
+      
+      // Status indicators
+      statusDiv = createDiv();
+      statusDiv.parent(settingsContainer);
+      statusDiv.id('connection-status');
+      statusDiv.html('<div>Connection: ❌ Disconnected</div>');
+      
+      // Connect button
+      connectButton = createButton('Connect to AWS IoT');
+      connectButton.parent(settingsContainer);
+      connectButton.style('margin-top', '10px');
+      connectButton.style('background-color', '#008037');
+      connectButton.mousePressed(toggleConnection);
+      
+      // Debug log
+      debugLog = createDiv();
+      debugLog.id('debug-log');
+      debugLog.parent(settingsContainer);
+      logDebug("Application initialized");
+    }
+
+    // Toggle MQTT connection
+    function toggleConnection() {
+      if (connectionStatus) {
+        disconnectMqtt();
       } else {
-        instructions.style.display = 'block';
+        connectMqtt();
+      }
+    }
+
+    // Log to debug console
+    function logDebug(message) {
+      if (debugLog) {
+        const time = new Date().toLocaleTimeString();
+        debugLog.html(debugLog.html() + `<div>[${time}] ${message}</div>`);
+        // Auto-scroll to bottom
+        debugLog.elt.scrollTop = debugLog.elt.scrollHeight;
+      }
+      console.log(message);
+    }
+
+    // Connect to MQTT broker
+    function connectMqtt() {
+      // Get values from inputs
+      awsRegion = regionInput.value();
+      awsIotEndpoint = endpointInput.value();
+      awsAccessKey = accessKeyInput.value();
+      awsSecretKey = secretKeyInput.value();
+      mqttTopic = topicInput.value();
+      
+      // Validate inputs
+      if (!awsRegion || !awsIotEndpoint || !awsAccessKey || !awsSecretKey || !mqttTopic) {
+        statusMessage = "Please fill in all fields";
+        logDebug("Connection failed: Missing required fields");
+        return;
+      }
+      
+      statusMessage = "Connecting to MQTT broker...";
+      logDebug("Attempting to connect to: " + awsIotEndpoint);
+      
+      try {
+        // Update button state
+        connectButton.html('Connecting...');
+        connectButton.attribute('disabled', '');
+        connectButton.style('background-color', '#cccccc');
+        
+        // Set up AWS configuration
+        AWS.config.region = awsRegion;
+        AWS.config.credentials = new AWS.Credentials({
+          accessKeyId: awsAccessKey,
+          secretAccessKey: awsSecretKey
+        });
+        
+        // Create a sigv4 signed url for mqtt connection
+        const sigV4Url = createSignedUrl();
+        logDebug("SigV4 URL created successfully");
+        
+        // Create MQTT client
+        const clientId = "afl-ball-tracker-" + Math.random().toString(16).substr(2, 8);
+        logDebug("Connecting as client: " + clientId);
+        
+        client = mqtt.connect(sigV4Url, {
+          clientId: clientId,
+          reconnectPeriod: 3000,
+          keepalive: 30
+        });
+        
+        // MQTT event handlers
+        client.on('connect', function() {
+          connectionStatus = true;
+          statusMessage = "Connected to AWS IoT";
+          logDebug("Connected to MQTT broker");
+          
+          // Subscribe to topic
+          client.subscribe(mqttTopic, function(err) {
+            if (err) {
+              logDebug("Error subscribing to topic: " + err.message);
+              statusMessage = "Error subscribing: " + err.message;
+            } else {
+              logDebug("Subscribed to topic: " + mqttTopic);
+              statusMessage = "Subscribed to " + mqttTopic;
+            }
+          });
+          
+          updateConnectionUI(true);
+        });
+        
+        client.on('message', function(topic, message) {
+          onMessageArrived(topic, message);
+        });
+        
+        client.on('error', function(err) {
+          logDebug("MQTT error: " + err.message);
+          statusMessage = "MQTT Error: " + err.message;
+          updateConnectionUI(false);
+        });
+        
+        client.on('close', function() {
+          logDebug("MQTT connection closed");
+          connectionStatus = false;
+          statusMessage = "MQTT connection closed";
+          updateConnectionUI(false);
+        });
+        
+      } catch (error) {
+        logDebug("Connection error: " + error.message);
+        statusMessage = "Failed to connect: " + error.message;
+        updateConnectionUI(false);
+      }
+    }
+
+    // Creates a SigV4 signed WebSocket URL for AWS IoT
+    function createSignedUrl() {
+      // Time handling
+      const datetime = new Date().toISOString().replace(/[:\-]|\.\d{3}/g, '');
+      const date = datetime.substring(0, 8);
+      
+      // Policy for AWS IoT
+      const credentialScope = date + '/' + awsRegion + '/iotdevicegateway/aws4_request';
+      
+      // Build canonical request
+      let canonicalQuerystring = 'X-Amz-Algorithm=AWS4-HMAC-SHA256';
+      canonicalQuerystring += '&X-Amz-Credential=' + encodeURIComponent(awsAccessKey + '/' + credentialScope);
+      canonicalQuerystring += '&X-Amz-Date=' + datetime;
+      canonicalQuerystring += '&X-Amz-SignedHeaders=host';
+      
+      const canonicalHeaders = 'host:' + awsIotEndpoint + '\n';
+      const payloadHash = CryptoJS.SHA256('').toString(CryptoJS.enc.Hex);
+      
+      const canonicalRequest = 'GET\n/mqtt\n' + canonicalQuerystring + '\n' + canonicalHeaders + '\nhost\n' + payloadHash;
+      logDebug("Canonical request created");
+      
+      // Create signature
+      const stringToSign = 'AWS4-HMAC-SHA256\n' + datetime + '\n' + credentialScope + '\n' + CryptoJS.SHA256(canonicalRequest).toString(CryptoJS.enc.Hex);
+      
+      // Calculate signature
+      let signingKey = CryptoJS.HmacSHA256(date, 'AWS4' + awsSecretKey);
+      signingKey = CryptoJS.HmacSHA256(awsRegion, signingKey);
+      signingKey = CryptoJS.HmacSHA256('iotdevicegateway', signingKey);
+      signingKey = CryptoJS.HmacSHA256('aws4_request', signingKey);
+      
+      const signature = CryptoJS.HmacSHA256(stringToSign, signingKey).toString(CryptoJS.enc.Hex);
+      logDebug("Signature created");
+      
+      // Add signature to query string
+      canonicalQuerystring += '&X-Amz-Signature=' + signature;
+      
+      // Create WebSocket URL
+      const requestUrl = 'wss://' + awsIotEndpoint + '/mqtt?' + canonicalQuerystring;
+      return requestUrl;
+    }
+
+    // Update connection UI elements
+    function updateConnectionUI(connected) {
+      connectionStatus = connected;
+      
+      if (statusDiv) {
+        statusDiv.html(`<div>Connection: ${connected ? '✅ Connected' : '❌ Disconnected'}</div>`);
+      }
+      
+      if (connectButton) {
+        connectButton.html(connected ? 'Disconnect' : 'Connect to AWS IoT');
+        connectButton.removeAttribute('disabled');
+        connectButton.style('background-color', connected ? '#d9534f' : '#008037');
+        connectButton.style('cursor', 'pointer');
+      }
+    }
+
+    // Disconnect from MQTT broker
+    function disconnectMqtt() {
+      if (client) {
+        try {
+          client.end(true);
+          statusMessage = "Disconnected from MQTT broker";
+          logDebug("Disconnected from MQTT broker");
+        } catch (error) {
+          logDebug("Error disconnecting: " + error.message);
+          statusMessage = "Error disconnecting: " + error.message;
+        }
+      }
+      
+      connectionStatus = false;
+      updateConnectionUI(false);
+    }
+
+    // Handle incoming MQTT messages
+    function onMessageArrived(topic, payload) {
+      try {
+        // Convert payload to string
+        const payloadStr = payload.toString();
+        lastReceivedMessage = payloadStr;
+        logDebug("Message received: " + payloadStr.substring(0, 50) + (payloadStr.length > 50 ? "..." : ""));
+        
+        // Parse the JSON message
+        const data = JSON.parse(payloadStr);
+        
+        // Update ball position
+        updateBallPosition(data);
+        
+        // Update last message time
+        lastMessageTime = millis();
+      } catch (error) {
+        logDebug("Error parsing message: " + error.message);
+        statusMessage = "Error parsing message: " + error.message;
+      }
+    }
+
+    // Update ball position based on received coordinates
+    function updateBallPosition(data) {
+      if (data.X !== undefined && data.Y !== undefined) {
+        // Scale coordinates to canvas size
+        const scaleX = appWidth / 102;
+        const scaleY = appHeight / 64;
+        
+        ballX = data.X * scaleX;
+        ballY = data.Y * scaleY;
+        
+        logDebug(`Ball position updated: (${data.X}, ${data.Y}) → (${ballX.toFixed(1)}, ${ballY.toFixed(1)})`);
+      }
+    }
+
+    // P5.js draw function - called every frame
+    function draw() {
+      // Draw field
+      image(fieldImage, 0, 0, appWidth, appHeight);
+      
+      // Draw ball
+      image(ballImage, ballX - ballSize/2, ballY - ballSize/2, ballSize, ballSize);
+      
+      // Display status
+      displayStatus();
+      
+      // Display last message
+      displayLastMessage();
+      
+      // Check data freshness
+      checkDataFreshness();
+    }
+
+    // Display connection status
+    function displayStatus() {
+      push();
+      fill(0, 0, 0, 180);
+      noStroke();
+      rect(10, appHeight - 70, 400, 60, 5);
+      
+      textSize(16);
+      fill(255);
+      textAlign(LEFT, TOP);
+      text("Status: " + statusMessage, 20, appHeight - 60);
+      
+      // Connection indicator
+      fill(connectionStatus ? color(0, 255, 0) : color(255, 0, 0));
+      ellipse(380, appHeight - 40, 20, 20);
+      pop();
+    }
+
+    // Display last received message
+    function displayLastMessage() {
+      if (!lastReceivedMessage) return;
+      
+      push();
+      fill(0, 0, 0, 180);
+      noStroke();
+      rect(appWidth - 410, appHeight - 70, 400, 60, 5);
+      
+      textSize(14);
+      fill(255);
+      textAlign(LEFT, TOP);
+      text("Last message: " + lastReceivedMessage.substring(0, 50) + 
+           (lastReceivedMessage.length > 50 ? "..." : ""), 
+           appWidth - 400, appHeight - 60);
+      pop();
+    }
+
+    // Check if data is stale
+    function checkDataFreshness() {
+      // Check if data is stale (no message for more than 3 seconds)
+      if (lastMessageTime > 0 && millis() - lastMessageTime > 3000) {
+        push();
+        fill(255, 0, 0, 200);
+        noStroke();
+        rect(appWidth/2 - 150, 10, 300, 40, 5);
+        
+        textSize(18);
+        fill(255);
+        textAlign(CENTER, CENTER);
+        text("No data received for " + 
+             Math.floor((millis() - lastMessageTime) / 1000) + " seconds", 
+             appWidth/2, 30);
+        pop();
       }
     }
     
-    // Show instructions on first load
-    window.onload = function() {
-      // Check if AWS SDK is loaded
-      if (typeof AWS === 'undefined') {
-        alert("Warning: AWS SDK failed to load. This application may not work properly. Please check your internet connection and refresh the page.");
+    // Toggle instructions panel
+    function toggleInstructions() {
+      const instructions = document.getElementById('instructions');
+      if (instructions.style.display === 'none') {
+        instructions.style.display = 'block';
+      } else {
+        instructions.style.display = 'none';
       }
-      
-      // Show the instructions panel after a short delay
-      setTimeout(function() {
-        document.getElementById('instructions').style.display = 'block';
-      }, 1000);
-    };
+    }
   </script>
-  
-  <!-- Main application code -->
-  <script src="aws-iot-tracker.js"></script>
 </body>
 </html>
