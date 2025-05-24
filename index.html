@@ -206,7 +206,7 @@
       // Load field and ball images
       // Use placeholders if images aren't available
       try {
-        fieldImage = loadImage('https://raw.githubusercontent.com/timf34/ball-position-tracker/refs/heads/main/PitchCorrect.png');
+        fieldImage = loadImage('https://raw.githubusercontent.com/timf34/ball-position-tracker/refs/heads/main/footballPitch.png');
         ballImage = loadImage('https://raw.githubusercontent.com/timf34/ball-position-tracker/refs/heads/main/AFLBall.png');
       } catch (e) {
         console.error("Error loading images:", e);
@@ -540,7 +540,8 @@
         const scaleX = appWidth / 102;
         const scaleY = appHeight / 64;
         
-        ballX = data.X * scaleX;
+        // ballX = data.X * scaleX;
+        ballX = appWidth - data.X * scaleX;
         ballY = data.Y * scaleY;
         
         logDebug(`Ball position updated: (${data.X}, ${data.Y}) → (${ballX.toFixed(1)}, ${ballY.toFixed(1)})`);
