@@ -540,8 +540,8 @@
         const scaleX = appWidth / 102;
         const scaleY = appHeight / 64;
         
-        // ballX = data.X * scaleX;
-        ballX = appWidth - data.X * scaleX;
+        ballX = data.X * scaleX;
+        // ballX = appWidth - data.X * scaleX;  // Not sure why we had this 
         ballY = data.Y * scaleY;
         
         logDebug(`Ball position updated: (${data.X}, ${data.Y}) → (${ballX.toFixed(1)}, ${ballY.toFixed(1)})`);
