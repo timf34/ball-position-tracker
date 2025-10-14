@@ -192,7 +192,8 @@
     let previousDirection = null; // 'left', 'right', or null
     let hitDetected = false;
     let hitDisplayTime = 0;
-    let hitDisplayDuration = 400; // Show hit message for 1 second (1000ms)
+    let hitDisplayDuration = 400; 
+    let netZoneThreshold = 3; // Units away from center (50) to consider as net zone
 
     // UI elements
     let connectButton;
@@ -587,7 +588,18 @@
           if (previousDirection !== null && currentDirection !== previousDirection) {
             hitDetected = true;
             hitDisplayTime = millis(); // Record when hit was detected
-            logDebug(`🎾 HIT DETECTED! Direction changed from ${previousDirection} to ${currentDirection}`);
+            
+            // Check if hit occurred near center (net hit)
+            // remappedX should be close to 50 for a net hit
+            const distanceFromCenter = Math.abs(remappedX - 50);
+            
+            if (distanceFromCenter <= netZoneThreshold) {
+              hitType = "NET HIT";
+              logDebug(`🥅 NET HIT DETECTED! Direction changed at X=${remappedX.toFixed(1)} (${distanceFromCenter.toFixed(1)} units from center)`);
+            } else {
+              hitType = "HIT";
+              logDebug(`🎾 HIT DETECTED! Direction changed from ${previousDirection} to ${currentDirection}`);
+            }
           }
           
           previousDirection = currentDirection;
@@ -601,21 +613,27 @@
       }
     }
 
+    // Display hit notification with different styling for net hits
     function displayHitNotification() {
       // Check if we should still display the hit message
       if (hitDetected && millis() - hitDisplayTime < hitDisplayDuration) {
         push();
         
-        // Semi-transparent background
-        fill(255, 165, 0, 220); // Orange with transparency
+        // Different colors for net hits vs regular hits
+        if (hitType === "NET HIT") {
+          fill(255, 50, 50, 220); // Red for net hits
+        } else {
+          fill(255, 165, 0, 220); // Orange for regular hits
+        }
+        
         noStroke();
         rect(appWidth/2 - 100, appHeight/2 - 50, 200, 100, 10);
         
         // White text
-        textSize(32);
+        textSize(hitType === "NET HIT" ? 28 : 32); // Slightly smaller for "NET HIT"
         fill(255);
         textAlign(CENTER, CENTER);
-        text("HIT!", appWidth/2, appHeight/2);
+        text(hitType, appWidth/2, appHeight/2);
         
         pop();
       } else if (hitDetected && millis() - hitDisplayTime >= hitDisplayDuration) {
