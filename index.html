@@ -188,6 +188,12 @@
     let awsAccessKey = "";
     let awsSecretKey = "";
 
+    let previousBallX = null;
+    let previousDirection = null; // 'left', 'right', or null
+    let hitDetected = false;
+    let hitDisplayTime = 0;
+    let hitDisplayDuration = 400; // Show hit message for 1 second (1000ms)
+
     // UI elements
     let connectButton;
     let topicInput;
@@ -565,17 +571,56 @@
     function updateBallPosition(data) {
       if (data.X !== undefined && data.Y !== undefined) {
         // REMAP X coordinate from [25, 75] to [12.5, 87.5]
-        // Formula: newX = ((X - oldMin) / (oldMax - oldMin)) * (newMax - newMin) + newMin
         const remappedX = ((data.X - 25) / (75 - 25)) * (87.5 - 12.5) + 12.5;
         
         // Scale coordinates to canvas size
         const scaleX = appWidth / 102;
         const scaleY = appHeight / 64;
         
-        ballX = remappedX * scaleX;  // Use remapped X instead of data.X
+        const newBallX = remappedX * scaleX;
+        
+        // DIRECTION CHANGE DETECTION (HIT DETECTION)
+        if (previousBallX !== null) {
+          const currentDirection = newBallX > previousBallX ? 'right' : 'left';
+          
+          // Check if direction changed (hit detected!)
+          if (previousDirection !== null && currentDirection !== previousDirection) {
+            hitDetected = true;
+            hitDisplayTime = millis(); // Record when hit was detected
+            logDebug(`🎾 HIT DETECTED! Direction changed from ${previousDirection} to ${currentDirection}`);
+          }
+          
+          previousDirection = currentDirection;
+        }
+        
+        previousBallX = newBallX;
+        ballX = newBallX;
         ballY = data.Y * scaleY;
         
         logDebug(`Ball position updated: (${data.X}, ${data.Y}) → remapped X: ${remappedX.toFixed(1)} → canvas: (${ballX.toFixed(1)}, ${ballY.toFixed(1)})`);
+      }
+    }
+
+    function displayHitNotification() {
+      // Check if we should still display the hit message
+      if (hitDetected && millis() - hitDisplayTime < hitDisplayDuration) {
+        push();
+        
+        // Semi-transparent background
+        fill(255, 165, 0, 220); // Orange with transparency
+        noStroke();
+        rect(appWidth/2 - 100, appHeight/2 - 50, 200, 100, 10);
+        
+        // White text
+        textSize(32);
+        fill(255);
+        textAlign(CENTER, CENTER);
+        text("HIT!", appWidth/2, appHeight/2);
+        
+        pop();
+      } else if (hitDetected && millis() - hitDisplayTime >= hitDisplayDuration) {
+        // Reset hit detection after display duration
+        hitDetected = false;
       }
     }
 
@@ -595,6 +640,8 @@
       
       // Check data freshness
       checkDataFreshness();
+
+      displayHitNotification();
     }
 
     // Display connection status
