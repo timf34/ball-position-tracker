@@ -564,15 +564,18 @@
     // Update ball position based on received coordinates
     function updateBallPosition(data) {
       if (data.X !== undefined && data.Y !== undefined) {
+        // REMAP X coordinate from [25, 75] to [12.5, 87.5]
+        // Formula: newX = ((X - oldMin) / (oldMax - oldMin)) * (newMax - newMin) + newMin
+        const remappedX = ((data.X - 25) / (75 - 25)) * (87.5 - 12.5) + 12.5;
+        
         // Scale coordinates to canvas size
         const scaleX = appWidth / 102;
         const scaleY = appHeight / 64;
         
-        ballX = data.X * scaleX;
-        // ballX = appWidth - data.X * scaleX;  // Not sure why we had this 
+        ballX = remappedX * scaleX;  // Use remapped X instead of data.X
         ballY = data.Y * scaleY;
         
-        logDebug(`Ball position updated: (${data.X}, ${data.Y}) → (${ballX.toFixed(1)}, ${ballY.toFixed(1)})`);
+        logDebug(`Ball position updated: (${data.X}, ${data.Y}) → remapped X: ${remappedX.toFixed(1)} → canvas: (${ballX.toFixed(1)}, ${ballY.toFixed(1)})`);
       }
     }
 
