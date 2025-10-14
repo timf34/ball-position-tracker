@@ -181,6 +181,7 @@
     let awsIotEndpoint = "a3lkzcadhi1yzr-ats.iot.ap-southeast-2.amazonaws.com";
     let statusMessage = "Not connected";
     let lastReceivedMessage = "";
+    let lastProcessedTimestamp = -Infinity;
 
     // AWS credentials
     let awsRegion = "ap-southeast-2"; // Default region
@@ -517,16 +518,46 @@
         // Convert payload to string
         const payloadStr = payload.toString();
         lastReceivedMessage = payloadStr;
-        logDebug("Message received: " + payloadStr.substring(0, 50) + (payloadStr.length > 50 ? "..." : ""));
         
         // Parse the JSON message
         const data = JSON.parse(payloadStr);
         
-        // Update ball position
-        updateBallPosition(data);
+        // Check if it's a ball position message with timestamp
+        if (data.X !== undefined && data.Y !== undefined && data.T !== undefined) {
+          const timestamp = data.T;
+          
+          // Skip if this message is older than what we've already processed
+          if (timestamp <= lastProcessedTimestamp) {
+            logDebug(`SKIPPED old message: T=${timestamp.toFixed(3)}s (last: ${lastProcessedTimestamp.toFixed(3)}s)`);
+            return; // Don't process this message
+          }
+          
+          // Update the most recent timestamp
+          lastProcessedTimestamp = timestamp;
+          
+          // Log the message (only show first 50 chars to keep log clean)
+          logDebug("Message received: " + payloadStr.substring(0, 50) + (payloadStr.length > 50 ? "..." : ""));
+          
+          // Update ball position
+          updateBallPosition(data);
+          
+          // Update last message time
+          lastMessageTime = millis();
+        } 
+        // Handle event messages (rally_start, rally_end, etc.)
+        else if (data.type !== undefined) {
+          logDebug(`Event received: ${data.type}`);
+          
+          // Reset timestamp tracking on rally start
+          if (data.type === "rally_start") {
+            lastProcessedTimestamp = -Infinity;
+            logDebug("Rally started - timestamp tracker reset");
+          }
+        }
+        else {
+          logDebug("Unknown message format: " + payloadStr.substring(0, 50));
+        }
         
-        // Update last message time
-        lastMessageTime = millis();
       } catch (error) {
         logDebug("Error parsing message: " + error.message);
         statusMessage = "Error parsing message: " + error.message;
