@@ -178,13 +178,13 @@
     let client = null;
     let connectionStatus = false;
     let mqttTopic = "marvel_AUS/ai_pub"; // Default topic
-    let awsIotEndpoint = "a3lkzcadhi1yzr-ats.iot.ap-southeast-2.amazonaws.com";
+    let awsIotEndpoint = "a3lkzcadhi1yzr-ats.iot.eu-west-1.amazonaws.com";
     let statusMessage = "Not connected";
     let lastReceivedMessage = "";
     let lastProcessedTimestamp = -Infinity;
 
     // AWS credentials
-    let awsRegion = "ap-southeast-2"; // Default region
+    let awsRegion = "eu-west-1"; // Default region
     let awsAccessKey = "";
     let awsSecretKey = "";
 
@@ -211,29 +211,16 @@
         ballImage = loadImage('https://raw.githubusercontent.com/timf34/ball-position-tracker/refs/heads/main/AFLBall.png');
       } catch (e) {
         console.error("Error loading images:", e);
-        // Create fallback images if loading fails
-        fieldImage = createImage(appWidth, appHeight);
-        fieldImage.loadPixels();
-        for (let i = 0; i < fieldImage.width; i++) {
-          for (let j = 0; j < fieldImage.height; j++) {
-            fieldImage.set(i, j, color(34, 139, 34)); // Green field
-          }
-        }
-        fieldImage.updatePixels();
+        // Field: Use createGraphics and fill with background color
+        fieldImage = createGraphics(appWidth, appHeight);
+        fieldImage.background(34, 139, 34); // Green field - ONE operation instead of 960,000!
         
-        ballImage = createImage(ballSize, ballSize);
-        ballImage.loadPixels();
-        for (let i = 0; i < ballImage.width; i++) {
-          for (let j = 0; j < ballImage.height; j++) {
-            let d = dist(i, j, ballSize/2, ballSize/2);
-            if (d < ballSize/2) {
-              ballImage.set(i, j, color(165, 42, 42)); // Brown ball
-            } else {
-              ballImage.set(i, j, color(0, 0, 0, 0)); // Transparent
-            }
-          }
-        }
-        ballImage.updatePixels();
+        // Ball: Use createGraphics and draw a circle
+        ballImage = createGraphics(ballSize, ballSize);
+        ballImage.clear(); // Make background transparent
+        ballImage.fill(165, 42, 42); // Brown ball color
+        ballImage.noStroke();
+        ballImage.ellipse(ballSize/2, ballSize/2, ballSize, ballSize); // Draw circle
       }
     }
 
@@ -245,7 +232,7 @@
       // Setup UI elements
       setupUI();
       
-      frameRate(60);
+      frameRate(30);
       
       // Check if required libraries are available
       logDebug("MQTT.js loaded: " + (typeof mqtt !== 'undefined'));
@@ -341,8 +328,18 @@
     function logDebug(message) {
       if (debugLog) {
         const time = new Date().toLocaleTimeString();
-        debugLog.html(debugLog.html() + `<div>[${time}] ${message}</div>`);
-        // Auto-scroll to bottom
+        const logEntry = `<div>[${time}] ${message}</div>`;
+        
+        // Get current logs
+        let currentLogs = debugLog.elt.children;
+        
+        // Keep only last 50 entries
+        if (currentLogs.length > 50) {
+          debugLog.elt.removeChild(currentLogs[0]);
+        }
+        
+        // Append new entry
+        debugLog.elt.innerHTML += logEntry;
         debugLog.elt.scrollTop = debugLog.elt.scrollHeight;
       }
       console.log(message);
